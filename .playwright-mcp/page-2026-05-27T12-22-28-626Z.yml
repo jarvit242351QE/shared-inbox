@@ -1,0 +1,14 @@
+- generic [active] [ref=e1]:
+  - main [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]:
+        - img [ref=e6]
+        - generic [ref=e9]:
+          - heading "Shared Inbox" [level=1] [ref=e10]
+          - paragraph [ref=e11]: Sign in with a magic link
+      - generic [ref=e12]:
+        - text: Email
+        - textbox "Email" [ref=e13]:
+          - /placeholder: you@example.com
+      - button "Send magic link" [ref=e14] [cursor=pointer]
+  - alert [ref=e15]
