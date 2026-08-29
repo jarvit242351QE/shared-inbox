@@ -15,6 +15,14 @@ FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
+# `next build` statically analyzes API routes, which executes db/client.ts
+# and lib/redis.ts at module scope -- both throw immediately if their env
+# var is unset. Neither postgres.js nor ioredis connect eagerly at
+# construction (only on first query), so a syntactically valid but
+# unreachable placeholder is enough to get past the build; the real values
+# come from docker-compose's `environment:`/`env_file:` at container start.
+ENV DATABASE_URL=postgres://build:build@localhost:5432/build
+ENV REDIS_URL=redis://localhost:6379
 RUN pnpm build
 
 FROM base AS runner
