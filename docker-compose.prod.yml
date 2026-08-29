@@ -1,0 +1,75 @@
+# Self-contained production compose for a dedicated single-purpose host:
+# only the lead-ingest -> Claude-suggest -> auto-send pipeline runs here,
+# nothing else. No bull-board (queue-inspection UI for a human -- nothing
+# here needs a human). No database ports published (postgres/redis are only
+# reachable from web/worker over the internal compose network).
+#
+# `web` is bound to 127.0.0.1 only, not published to the internet directly:
+# Docker's iptables rules bypass ufw by default, so a normal `"3000:3000"`
+# publish would be reachable from the internet regardless of the firewall.
+# Put a reverse proxy (Caddy is already installed on this host) in front on
+# 80/443 -- those ARE covered by ufw -- and point it at 127.0.0.1:3000.
+#
+# Usage: docker compose -f docker-compose.prod.yml up -d --build
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "app"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--maxmemory-policy", "noeviction", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://app:app@postgres:5432/app
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://app:app@postgres:5432/app
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    deploy:
+      replicas: 2
+
+volumes:
+  postgres_data:
+  redis_data:
