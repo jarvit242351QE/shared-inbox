@@ -2,11 +2,15 @@ import Anthropic from "@anthropic-ai/sdk";
 
 const apiKey = process.env.ANTHROPIC_API_KEY;
 const defaultModel = process.env.ANTHROPIC_MODEL ?? "claude-opus-4-7";
+// Optional override so this app can point at an Anthropic-Messages-API-
+// compatible gateway (e.g. OpenLux) instead of the official Anthropic API.
+// Unset = official API, unchanged default behavior.
+const baseURL = process.env.ANTHROPIC_BASE_URL?.trim() || undefined;
 
 let client: Anthropic | null = null;
 function getClient(): Anthropic {
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is required");
-  if (!client) client = new Anthropic({ apiKey });
+  if (!client) client = new Anthropic({ apiKey, baseURL });
   return client;
 }
 

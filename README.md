@@ -150,6 +150,37 @@ pnpm loadtest -- --leads 1000 --rate 17
 
 ---
 
+## Auto-send mode
+
+By default, `pages.auto_send_enabled` is `true` for every page: as soon as a
+Claude suggestion is generated (`status: "ready"`), the worker immediately
+claims it, writes the outbound message, and enqueues it on the same
+outbound queue/worker/rate-limiter the manual "send suggestion" UI action
+uses — no one needs to open the inbox or click send for replies to go out.
+See `autoSendSuggestion()` in `worker/processors/suggestion.ts`.
+
+Race safety: if a newer inbound message arrives while Claude is still
+generating, the inbound processor supersedes the in-flight suggestion, and
+the atomic claim in `autoSendSuggestion` (`UPDATE ... WHERE status='ready'`)
+means the stale suggestion is never sent — same guarantee the manual-send
+path already had, just applied automatically.
+
+To require human review on a specific page instead (e.g. a page you want a
+setter to handle by hand), set that page's `auto_send_enabled` to `false`
+directly in Postgres — there's no UI toggle for it yet. The manual-review
+inbox UI still works normally either way; auto-send doesn't remove it, it
+just means using it isn't required.
+
+### Reusing an Anthropic-compatible gateway (OpenLux, etc.)
+
+`ANTHROPIC_BASE_URL` (optional) points the Claude client at any endpoint
+that speaks the Anthropic Messages API — e.g. `https://api.openlux.ai` — so
+this app can share a key/account with another Anthropic-routed system
+instead of needing its own. Unset = official `api.anthropic.com`, unchanged
+default behavior. See `lib/anthropic.ts`.
+
+---
+
 ## Production deployment
 
 ```bash
@@ -180,9 +211,21 @@ reverse_proxy @sse web:3100 {
 | `DATABASE_URL`       | Postgres connection string                                                    |
 | `REDIS_URL`          | Redis connection string                                                       |
 | `ANTHROPIC_API_KEY`  | Claude API key (sk-ant-…). Suggestions fail with status=error if missing.    |
+| `ANTHROPIC_BASE_URL` | Optional. Point at an Anthropic-Messages-API-compatible gateway (e.g. OpenLux) instead of the official API. See "Auto-send mode" above. |
 | `ANTHROPIC_MODEL`    | Default model. Per-page override available in Settings → Pages → Claude model |
 | `APP_ENCRYPTION_KEY` | 32-byte base64. AES-256-GCM key for encrypting ManyChat API keys at rest.    |
 | `OWNER_EMAIL`        | The only email that can authenticate                                          |
 | `RESEND_API_KEY`     | Optional. Without it, magic links print to the dev-server log                |
 | `AUTH_SECRET`        | Cookie signing secret (reserved for future use)                              |
 | `APP_URL`            | Public origin (used in magic-link emails)                                     |
+
+---
+
+## Deployments
+
+- **shared-inbox-1** (DigitalOcean, `ams3`) — dedicated production instance,
+  strictly this app and nothing else. Auto-send on for all pages,
+  `ANTHROPIC_BASE_URL` pointed at OpenLux (shared account with an unrelated
+  internal agent, kept on a separate host for isolation). No Bull Board, no
+  Postgres/Redis ports exposed externally — trimmed to only what the
+  ingest → suggest → send pipeline needs.

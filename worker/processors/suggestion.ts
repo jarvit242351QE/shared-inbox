@@ -5,6 +5,55 @@ import { conversations, messages, pages, suggestions } from "../../db/schema";
 import type { SuggestionJob } from "../../lib/queues";
 import { generateSuggestion, type ThreadTurn } from "../../lib/anthropic";
 import { publish } from "../../lib/realtime";
+import { getOutboundQueue, outboundGroupKey } from "../../lib/queues";
+
+// Auto-send a just-generated suggestion, mirroring the manual "send
+// suggestion" UI action (app/api/conversations/[id]/send/route.ts): claim
+// the suggestion atomically (loses the race cleanly if a human clicks send
+// at the same instant), insert the outbound message row, and enqueue it on
+// the same outbound queue/worker/rate-limiter every other send path uses.
+async function autoSendSuggestion(args: {
+  suggestionId: string;
+  conversationId: string;
+  pageId: string;
+  subscriberId: string;
+  text: string;
+}): Promise<void> {
+  const { suggestionId, conversationId, pageId, subscriberId, text } = args;
+
+  const claimed = await db
+    .update(suggestions)
+    .set({ status: "accepted", updatedAt: new Date() })
+    .where(and(eq(suggestions.id, suggestionId), eq(suggestions.status, "ready")))
+    .returning({ id: suggestions.id });
+  if (!claimed[0]) return;
+
+  const now = new Date();
+  const [inserted] = await db
+    .insert(messages)
+    .values({
+      conversationId,
+      direction: "out",
+      sender: "claude",
+      text,
+      status: "queued",
+      suggestionId,
+    })
+    .returning({ id: messages.id });
+
+  await db
+    .update(conversations)
+    .set({ lastMessageAt: now, unreadCount: 0 })
+    .where(eq(conversations.id, conversationId));
+
+  await getOutboundQueue().add(
+    "send",
+    { messageId: inserted!.id, conversationId, pageId, subscriberId, text },
+    { jobId: `${outboundGroupKey(pageId)}--${inserted!.id}` }
+  );
+
+  await publish({ type: "message", conversationId, pageId });
+}
 
 export async function processSuggestion(job: Job<SuggestionJob>): Promise<void> {
   const { conversationId, triggeredByMessageId } = job.data;
@@ -108,7 +157,7 @@ export async function processSuggestion(job: Job<SuggestionJob>): Promise<void> 
     });
 
     // Don't overwrite if another worker / hand-action already terminalized this suggestion.
-    await db
+    const readyRows = await db
       .update(suggestions)
       .set({
         status: "ready",
@@ -118,9 +167,23 @@ export async function processSuggestion(job: Job<SuggestionJob>): Promise<void> 
         outputTokens: result.outputTokens,
         updatedAt: new Date(),
       })
-      .where(and(eq(suggestions.id, suggestionId), eq(suggestions.status, "pending")));
+      .where(and(eq(suggestions.id, suggestionId), eq(suggestions.status, "pending")))
+      .returning({ id: suggestions.id });
 
     await publish({ type: "suggestion", conversationId, status: "ready" });
+
+    // Auto-send by default (page.autoSendEnabled). Skip if the update above
+    // affected no rows -- a newer inbound superseded this suggestion while
+    // Claude was generating, so sending it now would reply to a stale turn.
+    if (readyRows[0] && page.autoSendEnabled) {
+      await autoSendSuggestion({
+        suggestionId,
+        conversationId,
+        pageId: conversation.pageId,
+        subscriberId: conversation.subscriberId,
+        text: result.text,
+      });
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await db

@@ -1,0 +1,1 @@
+ALTER TABLE "pages" ADD COLUMN "auto_send_enabled" boolean DEFAULT true NOT NULL;

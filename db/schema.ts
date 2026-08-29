@@ -8,6 +8,7 @@ import {
   uniqueIndex,
   index,
   pgEnum,
+  boolean,
 } from "drizzle-orm/pg-core";
 import { sql, relations } from "drizzle-orm";
 
@@ -54,6 +55,10 @@ export const pages = pgTable("pages", {
       "You are a friendly, concise setter for an Instagram-DM funnel. Suggest the next single message to send. Match the conversation tone, keep it under 280 characters, drive toward booking a call when context supports it. Output only the message text — no preamble, no quotes."
     ),
   claudeModel: text("claude_model").notNull().default("claude-opus-4-7"),
+  // When true (default), a ready Claude suggestion is sent automatically —
+  // no human approval step. Set false on a page to fall back to the
+  // manual-review flow (suggestion sits until someone sends it from the UI).
+  autoSendEnabled: boolean("auto_send_enabled").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
