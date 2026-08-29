@@ -13,4 +13,10 @@ COPY . .
 
 ENV NODE_ENV=production
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["pnpm", "worker:start"]
+# Not `pnpm worker:start`: that script hardcodes `tsx --env-file=.env`,
+# which is for local dev where an actual .env file exists on disk. In the
+# container there is no .env file (correctly git/dockerignored) --
+# docker-compose's own `env_file:` directive already injects the same vars
+# as real process env vars before this command runs, so --env-file would
+# just fail looking for a file that was never meant to be here.
+CMD ["pnpm", "exec", "tsx", "worker/index.ts"]
