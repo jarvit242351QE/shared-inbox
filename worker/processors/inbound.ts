@@ -2,7 +2,7 @@ import type { Job } from "bullmq";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "../../db/client";
 import { conversations, messages, suggestions } from "../../db/schema";
-import type { InboundJob } from "../../lib/queues";
+import { getSuggestionQueue, type InboundJob } from "../../lib/queues";
 import { publish } from "../../lib/realtime";
 
 export async function processInbound(job: Job<InboundJob>): Promise<{ messageId: string }> {
@@ -74,5 +74,21 @@ export async function processInbound(job: Job<InboundJob>): Promise<{ messageId:
 
   await publish({ type: "message", conversationId, pageId });
 
-  return { messageId: inserted[0]!.id };
+  // Auto-trigger a suggestion for every new inbound lead message -- the
+  // original design only ever enqueued a SuggestionJob from a human
+  // clicking "suggest" in the UI (app/api/conversations/[id]/suggest/
+  // route.ts); there was no automatic trigger at all. This is what makes
+  // the pipeline actually run unattended: whether it also auto-*sends*
+  // once ready is a separate decision (pages.auto_send_enabled, checked in
+  // worker/processors/suggestion.ts) -- a page with auto-send off still
+  // gets its suggestion drafted automatically, just not sent without a
+  // human reviewing it.
+  const triggeredByMessageId = inserted[0]!.id;
+  await getSuggestionQueue().add(
+    "suggest",
+    { conversationId, triggeredByMessageId },
+    { jobId: `${conversationId}--${triggeredByMessageId}` }
+  );
+
+  return { messageId: triggeredByMessageId };
 }
